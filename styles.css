@@ -1,0 +1,1198 @@
+import React, { useState, useMemo, useEffect } from "react";
+
+// ─── Types ───────────────────────────────────────────────
+interface Guest {
+  id: number;
+  name: string;
+  group: string;
+  status: string;
+  side: string;
+  food: string;
+  invited: boolean;
+  payment: string;
+  amount: number;
+  notes: string;
+}
+
+// ─── Constants ───────────────────────────────────────────
+const GROUPS = [
+  {
+    id: "A",
+    emoji: "🔴",
+    bg: "bg-red-50",
+    border: "border-red-300",
+    badge: "bg-red-500",
+    text: "text-red-700",
+    note: "No se mueven si baja el cupo.",
+  },
+  {
+    id: "B",
+    emoji: "🟠",
+    bg: "bg-orange-50",
+    border: "border-orange-300",
+    badge: "bg-orange-500",
+    text: "text-orange-700",
+    note: "Se sostienen salvo ajuste fuerte.",
+  },
+  {
+    id: "C",
+    emoji: "🟡",
+    bg: "bg-yellow-50",
+    border: "border-yellow-300",
+    badge: "bg-yellow-500",
+    text: "text-yellow-700",
+    note: "Primeros en evaluarse si hay que bajar.",
+  },
+  {
+    id: "D",
+    emoji: "🟣",
+    bg: "bg-purple-50",
+    border: "border-purple-300",
+    badge: "bg-purple-500",
+    text: "text-purple-700",
+    note: "Van a ceremonia y brindis, no cena.",
+  },
+];
+
+const STATUS = [
+  { id: "confirmed", label: "Confirmado", color: "bg-green-500" },
+  { id: "pending", label: "Pendiente", color: "bg-yellow-400" },
+  { id: "declined", label: "No viene", color: "bg-gray-400" },
+];
+
+const SIDE = ["Novia", "Novio", "Ambos"];
+const FOOD = ["Adulto", "Joven"];
+const PAYMENT = ["No pagó", "Pagó", "Pagó parcial"];
+
+// ─── Helpers ─────────────────────────────────────────────
+const GROUP_LABELS: Record<string, string> = {
+  A: "Imprescindibles",
+  B: "Muy importantes",
+  C: "Deseables",
+  D: "Solo ceremonia",
+};
+const STATUS_LABELS: Record<string, string> = {
+  confirmed: "Confirmado",
+  pending: "Pendiente",
+  declined: "No viene",
+};
+const groupLabel = (id: string): string => GROUP_LABELS[id] || "";
+const statusLabel = (id: string): string => STATUS_LABELS[id] || "";
+
+const getGroup = (id: string) => GROUPS.find((g) => g.id === id) ?? GROUPS[0];
+const getStatus = (id: string) => STATUS.find((s) => s.id === id) ?? STATUS[1];
+
+const loadLS = <T,>(key: string, fallback: T): T => {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+const saveLS = (key: string, val: unknown) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch {}
+};
+
+let _nextId = Date.now();
+const makeGuest = (
+  name = "",
+  group = "A",
+  status = "pending",
+  side = "Ambos",
+  food = "Adulto",
+  invited = false,
+  payment = "No pagó",
+  amount = 0,
+  notes = ""
+): Guest => ({
+  id: _nextId++,
+  name,
+  group,
+  status,
+  side,
+  food,
+  invited,
+  payment,
+  amount,
+  notes,
+});
+
+// ─── App ─────────────────────────────────────────────────
+export default function App() {
+  const [guests, setGuests] = useState<Guest[]>(() =>
+    loadLS<Guest[]>("boda-guests", [])
+  );
+  const [cupo, setCupo] = useState<number>(() =>
+    loadLS<number>("boda-cupo", 100)
+  );
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [newRow, setNewRow] = useState<Guest | null>(null);
+  const [filterGroup, setFilterGroup] = useState("ALL");
+  const [filterStatus, setFilterStatus] = useState("ALL");
+  const [filterSide, setFilterSide] = useState("ALL");
+  const [filterInvited, setFilterInvited] = useState("ALL");
+  const [search, setSearch] = useState("");
+  const [exportModal, setExportModal] = useState<string | null>(null);
+  const [importModal, setImportModal] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [saveMsg, setSaveMsg] = useState("✅ Guardado en este dispositivo");
+
+  // Save
+  useEffect(() => {
+    setSaveMsg("💾 Guardando...");
+    const t = setTimeout(() => {
+      saveLS("boda-guests", guests);
+      saveLS("boda-cupo", cupo);
+      setSaveMsg("✅ Guardado en este dispositivo");
+    }, 500);
+    return () => clearTimeout(t);
+  }, [guests, cupo]);
+
+  const filtered = useMemo(
+    () =>
+      guests.filter((g) => {
+        if (filterGroup !== "ALL" && g.group !== filterGroup) return false;
+        if (filterStatus !== "ALL" && g.status !== filterStatus) return false;
+        if (filterSide !== "ALL" && g.side !== filterSide) return false;
+        if (filterInvited === "yes" && !g.invited) return false;
+        if (filterInvited === "no" && g.invited) return false;
+        if (
+          search &&
+          !g.name.toLowerCase().includes(search.toLowerCase()) &&
+          !g.notes.toLowerCase().includes(search.toLowerCase())
+        )
+          return false;
+        return true;
+      }),
+    [guests, filterGroup, filterStatus, filterSide, filterInvited, search]
+  );
+
+  const stats = useMemo(
+    () => ({
+      total: guests.length,
+      confirmed: guests.filter((g) => g.status === "confirmed").length,
+      pending: guests.filter((g) => g.status === "pending").length,
+      declined: guests.filter((g) => g.status === "declined").length,
+      dinner: guests.filter((g) => ["A", "B", "C"].includes(g.group)).length,
+      noDinner: guests.filter((g) => g.group === "D").length,
+      adulto: guests.filter(
+        (g) => (g.food || "Adulto") === "Adulto" && g.group !== "D"
+      ).length,
+      joven: guests.filter((g) => g.food === "Joven" && g.group !== "D").length,
+      inviteSent: guests.filter((g) => g.invited).length,
+      invitePending: guests.filter((g) => !g.invited).length,
+      paid: guests.filter((g) => g.payment === "Pagó").length,
+      partial: guests.filter((g) => g.payment === "Pagó parcial").length,
+      unpaid: guests.filter((g) => !g.payment || g.payment === "No pagó")
+        .length,
+      totalCollected: guests.reduce(
+        (acc, g) => acc + (Number(g.amount) || 0),
+        0
+      ),
+      byGroup: GROUPS.map((g) => ({
+        ...g,
+        count: guests.filter((x) => x.group === g.id).length,
+      })),
+    }),
+    [guests]
+  );
+
+  const updateGuest = (id: number, field: string, value: unknown) =>
+    setGuests((gs) =>
+      gs.map((g) => (g.id === id ? { ...g, [field]: value } : g))
+    );
+
+  const deleteGuest = (id: number) => {
+    if (window.confirm("¿Eliminar este invitado?"))
+      setGuests((gs) => gs.filter((g) => g.id !== id));
+  };
+
+  const addGuest = () => {
+    if (!newRow || !newRow.name.trim()) {
+      setNewRow(null);
+      return;
+    }
+    setGuests((gs) => [
+      ...gs,
+      makeGuest(
+        newRow.name,
+        newRow.group,
+        newRow.status,
+        newRow.side,
+        newRow.food,
+        newRow.invited,
+        newRow.payment,
+        newRow.amount,
+        newRow.notes
+      ),
+    ]);
+    setNewRow(null);
+  };
+
+  const generateCSV = () => {
+    const rows = [
+      [
+        "Nombre",
+        "Grupo",
+        "Prioridad",
+        "Estado",
+        "Parte",
+        "Comida",
+        "Cena",
+        "Invitación enviada",
+        "Pago",
+        "Monto",
+        "Notas",
+      ],
+    ];
+    guests.forEach((g) =>
+      rows.push([
+        g.name,
+        `Grupo ${g.group}`,
+        groupLabel(g.group),
+        statusLabel(g.status),
+        g.side,
+        g.group === "D" ? "-" : g.food || "Adulto",
+        g.group === "D" ? "Solo ceremonia" : "Cena",
+        g.invited ? "Sí" : "No",
+        g.payment || "No pagó",
+        String(g.amount || 0),
+        g.notes,
+      ])
+    );
+    return (
+      "\uFEFF" +
+      rows
+        .map((r) =>
+          r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")
+        )
+        .join("\n")
+    );
+  };
+
+  const importCSV = (text: string) => {
+    try {
+      const lines = text.trim().split("\n").slice(1);
+      const parsed: Guest[] = lines
+        .map((line) => {
+          const cols: string[] = [];
+          let cur = "",
+            inQ = false;
+          for (let i = 0; i < line.length; i++) {
+            const ch = line.charAt(i);
+            if (ch === '"') inQ = !inQ;
+            else if (ch === "," && !inQ) {
+              cols.push(cur.trim());
+              cur = "";
+            } else cur += ch;
+          }
+          cols.push(cur.trim());
+          const [
+            name,
+            grpRaw,
+            ,
+            statusRaw,
+            side,
+            foodRaw,
+            ,
+            invitedRaw,
+            paymentRaw,
+            amountRaw,
+            notes,
+          ] = cols;
+          const group = grpRaw?.replace("Grupo ", "").trim() || "A";
+          const status =
+            Object.entries(STATUS_LABELS).find(
+              ([, v]) => v === statusRaw
+            )?.[0] || "pending";
+          const food = foodRaw === "Joven" ? "Joven" : "Adulto";
+          const invited = invitedRaw === "Sí";
+          const payment = PAYMENT.includes(paymentRaw) ? paymentRaw : "No pagó";
+          const amount = Number(amountRaw) || 0;
+          if (!name) return null;
+          return makeGuest(
+            name,
+            group,
+            status,
+            side || "Ambos",
+            food,
+            invited,
+            payment,
+            amount,
+            notes || ""
+          );
+        })
+        .filter((g): g is Guest => g !== null);
+      if (parsed.length === 0) {
+        alert("No se encontraron invitados.");
+        return;
+      }
+      if (
+        window.confirm(
+          `¿Importar ${parsed.length} invitados? Esto reemplazará la lista actual.`
+        )
+      ) {
+        setGuests(parsed);
+        setImportModal(false);
+        setImportText("");
+      }
+    } catch {
+      alert(
+        "Error al leer el archivo. Asegurate de pegar el CSV generado por la app."
+      );
+    }
+  };
+
+  const paymentBadge = (p: string) =>
+    p === "Pagó"
+      ? "bg-green-500"
+      : p === "Pagó parcial"
+      ? "bg-yellow-400"
+      : "bg-red-400";
+
+  return (
+    <div
+      className="min-h-screen bg-gray-50 p-4"
+      style={{ fontFamily: "'Segoe UI', sans-serif" }}
+    >
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="text-center mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">
+            💍 Lista de Invitados
+          </h1>
+          <p className="text-gray-400 text-xs mt-1">{saveMsg}</p>
+        </div>
+
+        {/* Stats principales */}
+        <div className="grid grid-cols-2 gap-3 mb-3 sm:grid-cols-4">
+          {[
+            {
+              val: stats.total,
+              label: "Total invitados",
+              border: "border-pink-400",
+            },
+            {
+              val: stats.confirmed,
+              label: "Confirmados",
+              border: "border-green-400",
+              cls: "text-green-600",
+            },
+            {
+              val: stats.pending,
+              label: "Pendientes",
+              border: "border-yellow-400",
+              cls: "text-yellow-600",
+            },
+            {
+              val: stats.declined,
+              label: "No vienen",
+              border: "border-gray-400",
+              cls: "text-gray-500",
+            },
+          ].map(({ val, label, border, cls }) => (
+            <div
+              key={label}
+              className={`bg-white rounded-xl shadow p-4 flex flex-col items-center border-t-4 ${border}`}
+            >
+              <span className={`text-2xl font-bold ${cls ?? "text-gray-800"}`}>
+                {val}
+              </span>
+              <span className="text-xs text-gray-500">{label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Stats cena + menú */}
+        <div className="grid grid-cols-2 gap-3 mb-3 sm:grid-cols-3 lg:grid-cols-6">
+          {[
+            {
+              val: stats.dinner,
+              label: "Van a la cena",
+              border: "border-indigo-400",
+              cls: "text-indigo-600",
+              icon: "🍽️",
+            },
+            {
+              val: stats.noDinner,
+              label: "Solo ceremonia",
+              border: "border-gray-300",
+              cls: "text-gray-500",
+              icon: "⛪",
+            },
+            {
+              val: stats.adulto,
+              label: "Menú Adulto",
+              border: "border-blue-400",
+              cls: "text-blue-600",
+              icon: "🧑",
+            },
+            {
+              val: stats.joven,
+              label: "Menú Joven",
+              border: "border-pink-400",
+              cls: "text-pink-600",
+              icon: "🧒",
+            },
+            {
+              val: stats.inviteSent,
+              label: "Invit. enviadas",
+              border: "border-teal-400",
+              cls: "text-teal-600",
+              icon: "✉️",
+            },
+            {
+              val: stats.invitePending,
+              label: "Sin enviar",
+              border: "border-orange-300",
+              cls: "text-orange-500",
+              icon: "📭",
+            },
+          ].map(({ val, label, border, cls, icon }) => (
+            <div
+              key={label}
+              className={`bg-white rounded-xl shadow p-3 flex flex-col items-center border-t-4 ${border}`}
+            >
+              <span className="text-lg mb-1">{icon}</span>
+              <span className={`text-xl font-bold ${cls}`}>{val}</span>
+              <span className="text-xs text-gray-500 text-center">{label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Stats pagos */}
+        <div className="grid grid-cols-2 gap-3 mb-4 sm:grid-cols-4">
+          {[
+            {
+              val: stats.paid,
+              label: "Pagaron",
+              border: "border-green-400",
+              cls: "text-green-600",
+              icon: "✅",
+            },
+            {
+              val: stats.partial,
+              label: "Pago parcial",
+              border: "border-yellow-400",
+              cls: "text-yellow-600",
+              icon: "🔶",
+            },
+            {
+              val: stats.unpaid,
+              label: "No pagaron",
+              border: "border-red-300",
+              cls: "text-red-500",
+              icon: "❌",
+            },
+            {
+              val: `$${stats.totalCollected.toLocaleString("es-AR")}`,
+              label: "Total recaudado",
+              border: "border-emerald-400",
+              cls: "text-emerald-600",
+              icon: "💰",
+            },
+          ].map(({ val, label, border, cls, icon }) => (
+            <div
+              key={label}
+              className={`bg-white rounded-xl shadow p-3 flex flex-col items-center border-t-4 ${border}`}
+            >
+              <span className="text-lg mb-1">{icon}</span>
+              <span className={`text-xl font-bold ${cls}`}>{val}</span>
+              <span className="text-xs text-gray-500 text-center">{label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Cupo */}
+        <div className="bg-white rounded-xl shadow p-4 mb-4">
+          <div className="flex items-center gap-3 mb-2 flex-wrap">
+            <span className="text-sm font-semibold text-gray-700">
+              Cupo máximo:
+            </span>
+            <input
+              type="number"
+              value={cupo}
+              onChange={(e) => setCupo(Number(e.target.value))}
+              className="w-20 border rounded px-2 py-1 text-sm font-bold text-center"
+              min={0}
+            />
+            <span className="text-sm text-gray-500">
+              | Confirmados: <b>{stats.confirmed}</b> | Disponible:{" "}
+              <b
+                className={
+                  stats.confirmed > cupo ? "text-red-600" : "text-green-600"
+                }
+              >
+                {cupo - stats.confirmed}
+              </b>
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-3">
+            <div
+              className={`h-3 rounded-full transition-all ${
+                stats.confirmed / cupo > 1
+                  ? "bg-red-500"
+                  : stats.confirmed / cupo > 0.8
+                  ? "bg-orange-400"
+                  : "bg-green-400"
+              }`}
+              style={{
+                width: `${Math.min(100, (stats.confirmed / cupo) * 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Group cards */}
+        <div className="grid grid-cols-2 gap-2 mb-4 sm:grid-cols-4">
+          {stats.byGroup.map((g) => (
+            <div
+              key={g.id}
+              className={`rounded-xl shadow p-3 ${g.bg} border ${
+                g.border
+              } cursor-pointer ${
+                filterGroup === g.id ? "ring-2 ring-offset-1 ring-gray-400" : ""
+              }`}
+              onClick={() =>
+                setFilterGroup(filterGroup === g.id ? "ALL" : g.id)
+              }
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-700">
+                  {g.emoji} Grupo {g.id}
+                </span>
+                <span
+                  className={`text-white text-xs px-2 py-0.5 rounded-full font-bold ${g.badge}`}
+                >
+                  {g.count}
+                </span>
+              </div>
+              <p className={`text-xs mt-1 ${g.text}`}>{g.note}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Filters + actions */}
+        <div className="bg-white rounded-xl shadow p-3 mb-4 flex flex-wrap gap-2 items-center">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="🔍 Buscar..."
+            className="border rounded px-3 py-1.5 text-sm flex-1 min-w-28"
+          />
+          <select
+            value={filterGroup}
+            onChange={(e) => setFilterGroup(e.target.value)}
+            className="border rounded px-2 py-1.5 text-sm"
+          >
+            <option value="ALL">Todos los grupos</option>
+            {GROUPS.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.emoji} Grupo {g.id}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="border rounded px-2 py-1.5 text-sm"
+          >
+            <option value="ALL">Todos los estados</option>
+            {STATUS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterSide}
+            onChange={(e) => setFilterSide(e.target.value)}
+            className="border rounded px-2 py-1.5 text-sm"
+          >
+            <option value="ALL">Novia / Novio</option>
+            {SIDE.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterInvited}
+            onChange={(e) => setFilterInvited(e.target.value)}
+            className="border rounded px-2 py-1.5 text-sm"
+          >
+            <option value="ALL">Todas las invitaciones</option>
+            <option value="yes">✉️ Enviadas</option>
+            <option value="no">📭 Sin enviar</option>
+          </select>
+          <div className="flex gap-2 ml-auto flex-wrap">
+            <button
+              onClick={() => setImportModal(true)}
+              className="bg-gray-600 hover:bg-gray-700 text-white px-3 py-1.5 rounded text-sm font-semibold"
+            >
+              📥 Importar
+            </button>
+            <button
+              onClick={() => setExportModal("csv")}
+              disabled={guests.length === 0}
+              className="bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white px-3 py-1.5 rounded text-sm font-semibold"
+            >
+              📊 Excel
+            </button>
+            <button
+              onClick={() => setExportModal("pdf")}
+              disabled={guests.length === 0}
+              className="bg-red-500 hover:bg-red-600 disabled:opacity-40 text-white px-3 py-1.5 rounded text-sm font-semibold"
+            >
+              📄 PDF
+            </button>
+            <button
+              onClick={() => setNewRow(makeGuest())}
+              className="bg-pink-500 hover:bg-pink-600 text-white px-3 py-1.5 rounded text-sm font-semibold"
+            >
+              + Agregar
+            </button>
+          </div>
+        </div>
+
+        {/* Table */}
+        <div className="bg-white rounded-xl shadow overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-100 text-gray-600 text-xs uppercase tracking-wide">
+                <th className="p-3 text-left">Nombre</th>
+                <th className="p-3 text-left">Grupo</th>
+                <th className="p-3 text-left">Estado</th>
+                <th className="p-3 text-left">Parte</th>
+                <th className="p-3 text-left">Comida</th>
+                <th className="p-3 text-left">Cena</th>
+                <th className="p-3 text-center">Invitación</th>
+                <th className="p-3 text-left">Pago</th>
+                <th className="p-3 text-left">Monto $</th>
+                <th className="p-3 text-left">Notas</th>
+                <th className="p-3 text-center">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {newRow && (
+                <tr className="bg-pink-50 border-b border-pink-200">
+                  <td className="p-2">
+                    <input
+                      autoFocus
+                      value={newRow.name}
+                      onChange={(e) =>
+                        setNewRow({ ...newRow, name: e.target.value })
+                      }
+                      onKeyDown={(e) => e.key === "Enter" && addGuest()}
+                      className="border rounded px-2 py-1 w-full text-sm"
+                      placeholder="Nombre..."
+                    />
+                  </td>
+                  <td className="p-2">
+                    <select
+                      value={newRow.group}
+                      onChange={(e) =>
+                        setNewRow({ ...newRow, group: e.target.value })
+                      }
+                      className="border rounded px-1 py-1 text-sm w-full"
+                    >
+                      {GROUPS.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.emoji} {g.id}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="p-2">
+                    <select
+                      value={newRow.status}
+                      onChange={(e) =>
+                        setNewRow({ ...newRow, status: e.target.value })
+                      }
+                      className="border rounded px-1 py-1 text-sm w-full"
+                    >
+                      {STATUS.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="p-2">
+                    <select
+                      value={newRow.side}
+                      onChange={(e) =>
+                        setNewRow({ ...newRow, side: e.target.value })
+                      }
+                      className="border rounded px-1 py-1 text-sm w-full"
+                    >
+                      {SIDE.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="p-2">
+                    {newRow.group === "D" ? (
+                      <span className="text-xs text-gray-400">—</span>
+                    ) : (
+                      <select
+                        value={newRow.food}
+                        onChange={(e) =>
+                          setNewRow({ ...newRow, food: e.target.value })
+                        }
+                        className="border rounded px-1 py-1 text-sm w-full"
+                      >
+                        {FOOD.map((f) => (
+                          <option key={f} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                  <td className="p-2">
+                    <span
+                      className={`text-xs font-bold px-2 py-1 rounded-full text-white ${
+                        newRow.group === "D" ? "bg-gray-400" : "bg-indigo-500"
+                      }`}
+                    >
+                      {newRow.group === "D" ? "Ceremonia" : "Cena"}
+                    </span>
+                  </td>
+                  <td className="p-2 text-center">
+                    <button
+                      onClick={() =>
+                        setNewRow({ ...newRow, invited: !newRow.invited })
+                      }
+                      className={`text-lg transition ${
+                        newRow.invited ? "opacity-100" : "opacity-30"
+                      }`}
+                    >
+                      ✉️
+                    </button>
+                  </td>
+                  <td className="p-2">
+                    <select
+                      value={newRow.payment}
+                      onChange={(e) =>
+                        setNewRow({ ...newRow, payment: e.target.value })
+                      }
+                      className="border rounded px-1 py-1 text-sm w-full"
+                    >
+                      {PAYMENT.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="p-2">
+                    <input
+                      type="number"
+                      value={newRow.amount || ""}
+                      onChange={(e) =>
+                        setNewRow({ ...newRow, amount: Number(e.target.value) })
+                      }
+                      className="border rounded px-2 py-1 w-24 text-sm"
+                      placeholder="0"
+                      min={0}
+                    />
+                  </td>
+                  <td className="p-2">
+                    <input
+                      value={newRow.notes}
+                      onChange={(e) =>
+                        setNewRow({ ...newRow, notes: e.target.value })
+                      }
+                      className="border rounded px-2 py-1 w-full text-sm"
+                      placeholder="Notas..."
+                    />
+                  </td>
+                  <td className="p-2 text-center">
+                    <div className="flex gap-1 justify-center">
+                      <button
+                        onClick={addGuest}
+                        className="bg-green-500 text-white px-2 py-1 rounded text-xs"
+                      >
+                        ✓
+                      </button>
+                      <button
+                        onClick={() => setNewRow(null)}
+                        className="bg-gray-300 text-gray-700 px-2 py-1 rounded text-xs"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+
+              {filtered.length === 0 && !newRow && (
+                <tr>
+                  <td colSpan={11} className="text-center text-gray-400 py-10">
+                    No hay invitados. ¡Agregá el primero! 💍
+                  </td>
+                </tr>
+              )}
+
+              {filtered.map((g) => {
+                const grp = getGroup(g.group);
+                const stt = getStatus(g.status);
+                const isEd = editingId === g.id;
+                const isDinner = g.group !== "D";
+                return (
+                  <tr
+                    key={g.id}
+                    className={`border-b hover:bg-gray-50 transition ${grp.bg}`}
+                  >
+                    <td className="p-2">
+                      {isEd ? (
+                        <input
+                          value={g.name}
+                          onChange={(e) =>
+                            updateGuest(g.id, "name", e.target.value)
+                          }
+                          className="border rounded px-2 py-1 w-full text-sm"
+                        />
+                      ) : (
+                        <span className="font-medium text-gray-800">
+                          {g.name}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {isEd ? (
+                        <select
+                          value={g.group}
+                          onChange={(e) =>
+                            updateGuest(g.id, "group", e.target.value)
+                          }
+                          className="border rounded px-1 py-1 text-sm"
+                        >
+                          {GROUPS.map((gr) => (
+                            <option key={gr.id} value={gr.id}>
+                              {gr.emoji} {gr.id}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span
+                          className={`text-xs font-bold px-2 py-1 rounded-full text-white ${grp.badge}`}
+                        >
+                          {grp.emoji} {grp.id}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {isEd ? (
+                        <select
+                          value={g.status}
+                          onChange={(e) =>
+                            updateGuest(g.id, "status", e.target.value)
+                          }
+                          className="border rounded px-1 py-1 text-sm"
+                        >
+                          {STATUS.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span
+                          className={`text-xs font-bold px-2 py-1 rounded-full text-white ${stt.color}`}
+                        >
+                          {stt.label}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {isEd ? (
+                        <select
+                          value={g.side}
+                          onChange={(e) =>
+                            updateGuest(g.id, "side", e.target.value)
+                          }
+                          className="border rounded px-1 py-1 text-sm"
+                        >
+                          {SIDE.map((s) => (
+                            <option key={s} value={s}>
+                              {s}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-xs text-gray-600">{g.side}</span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {isEd && isDinner ? (
+                        <select
+                          value={g.food || "Adulto"}
+                          onChange={(e) =>
+                            updateGuest(g.id, "food", e.target.value)
+                          }
+                          className="border rounded px-1 py-1 text-sm"
+                        >
+                          {FOOD.map((f) => (
+                            <option key={f} value={f}>
+                              {f}
+                            </option>
+                          ))}
+                        </select>
+                      ) : isDinner ? (
+                        <span
+                          className={`text-xs font-bold px-2 py-1 rounded-full text-white ${
+                            (g.food || "Adulto") === "Joven"
+                              ? "bg-pink-400"
+                              : "bg-blue-400"
+                          }`}
+                        >
+                          {g.food || "Adulto"}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      <span
+                        className={`text-xs font-bold px-2 py-1 rounded-full text-white ${
+                          isDinner ? "bg-indigo-500" : "bg-gray-400"
+                        }`}
+                      >
+                        {isDinner ? "Cena" : "Ceremonia"}
+                      </span>
+                    </td>
+                    <td className="p-2 text-center">
+                      <button
+                        onClick={() => updateGuest(g.id, "invited", !g.invited)}
+                        className={`text-lg transition-all ${
+                          g.invited
+                            ? "opacity-100"
+                            : "opacity-25 hover:opacity-60"
+                        }`}
+                        title={g.invited ? "Enviada ✓" : "Marcar como enviada"}
+                      >
+                        ✉️
+                      </button>
+                    </td>
+                    <td className="p-2">
+                      {isEd ? (
+                        <select
+                          value={g.payment || "No pagó"}
+                          onChange={(e) =>
+                            updateGuest(g.id, "payment", e.target.value)
+                          }
+                          className="border rounded px-1 py-1 text-sm"
+                        >
+                          {PAYMENT.map((p) => (
+                            <option key={p} value={p}>
+                              {p}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span
+                          className={`text-xs font-bold px-2 py-1 rounded-full text-white ${paymentBadge(
+                            g.payment
+                          )}`}
+                        >
+                          {g.payment || "No pagó"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {isEd ? (
+                        <input
+                          type="number"
+                          value={g.amount || ""}
+                          onChange={(e) =>
+                            updateGuest(g.id, "amount", Number(e.target.value))
+                          }
+                          className="border rounded px-2 py-1 w-24 text-sm"
+                          min={0}
+                        />
+                      ) : (
+                        <span className="text-sm font-medium text-gray-700">
+                          {g.amount ? (
+                            `$${Number(g.amount).toLocaleString("es-AR")}`
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {isEd ? (
+                        <input
+                          value={g.notes}
+                          onChange={(e) =>
+                            updateGuest(g.id, "notes", e.target.value)
+                          }
+                          className="border rounded px-2 py-1 w-full text-sm"
+                        />
+                      ) : (
+                        <span className="text-xs text-gray-500 italic">
+                          {g.notes}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2 text-center">
+                      <div className="flex gap-1 justify-center">
+                        <button
+                          onClick={() => setEditingId(isEd ? null : g.id)}
+                          className={`px-2 py-1 rounded text-xs font-medium ${
+                            isEd
+                              ? "bg-green-500 text-white"
+                              : "bg-blue-100 text-blue-700"
+                          }`}
+                        >
+                          {isEd ? "✓" : "✏️"}
+                        </button>
+                        <button
+                          onClick={() => deleteGuest(g.id)}
+                          className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs"
+                        >
+                          🗑
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-center text-xs text-gray-400 mt-4">
+          Los datos se guardan en el navegador de este dispositivo 💾
+        </p>
+      </div>
+
+      {/* Import Modal */}
+      {importModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="font-bold text-gray-800">📥 Importar desde CSV</h2>
+              <button
+                onClick={() => {
+                  setImportModal(false);
+                  setImportText("");
+                }}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4">
+              <p className="text-sm text-gray-600 mb-3">
+                Pegá acá el contenido del CSV exportado desde la app.{" "}
+                <b>Reemplazará la lista actual.</b>
+              </p>
+              <textarea
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                className="w-full h-56 text-xs font-mono border rounded p-2 bg-gray-50 resize-none"
+                placeholder="Pegá el CSV acá..."
+              />
+              <p className="text-xs text-gray-400 mt-2">
+                💡 Usá el botón 📊 Excel de la app en Claude, copiá todo el
+                texto y pegalo acá.
+              </p>
+            </div>
+            <div className="p-4 border-t flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setImportModal(false);
+                  setImportText("");
+                }}
+                className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => importCSV(importText)}
+                disabled={!importText.trim()}
+                className="bg-pink-500 hover:bg-pink-600 disabled:opacity-40 text-white px-4 py-2 rounded text-sm font-semibold"
+              >
+                Importar lista
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Export Modal */}
+      {exportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="font-bold text-gray-800">
+                {exportModal === "csv"
+                  ? "📊 Exportar a Excel (CSV)"
+                  : "📄 Exportar a PDF"}
+              </h2>
+              <button
+                onClick={() => setExportModal(null)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4">
+              {exportModal === "csv" ? (
+                <>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Copiá este texto, pegalo en un archivo de texto, guardalo
+                    como <b>invitados.csv</b> y abrilo con Excel o Google
+                    Sheets.
+                  </p>
+                  <textarea
+                    readOnly
+                    value={generateCSV()}
+                    className="w-full h-48 text-xs font-mono border rounded p-2 bg-gray-50 resize-none"
+                    onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                  />
+                  <p className="text-xs text-gray-400 mt-2">
+                    💡 Hacé clic en el texto para seleccionarlo todo, luego
+                    Ctrl+C para copiar.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Copiá este texto y pegalo en Word o Google Docs para
+                    exportar como PDF.
+                  </p>
+                  <textarea
+                    readOnly
+                    value={generateCSV()}
+                    className="w-full h-64 text-xs font-mono border rounded p-2 bg-gray-50 resize-none"
+                    onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                  />
+                  <p className="text-xs text-gray-400 mt-2">
+                    💡 Hacé clic en el texto para seleccionarlo todo, luego
+                    Ctrl+C para copiar.
+                  </p>
+                </>
+              )}
+            </div>
+            <div className="p-4 border-t flex justify-end">
+              <button
+                onClick={() => setExportModal(null)}
+                className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded text-sm"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
